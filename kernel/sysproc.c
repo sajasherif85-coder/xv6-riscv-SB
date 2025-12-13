@@ -6,6 +6,9 @@
 #include "spinlock.h"
 #include "proc.h"
 
+extern struct proc proc[NPROC];
+extern int sched_mode;
+
 uint64
 sys_exit(void)
 {
@@ -19,6 +22,28 @@ uint64
 sys_getpid(void)
 {
   return myproc()->pid;
+}
+
+uint64
+sys_getppid(void)
+{
+  struct proc *p = myproc(); //myproc gets the current process
+  if (p->parent)
+    return p->parent->pid;
+  else
+    return 0; // No parent process
+}
+
+uint64
+sys_getptable(void)
+{
+  int nproc;
+  uint64 buffer;
+
+  argint(0, &nproc);
+  argaddr(1, &buffer);
+
+  return getptable(nproc, buffer);
 }
 
 uint64
@@ -78,7 +103,7 @@ sys_kill(void)
   argint(0, &pid);
   return kill(pid);
 }
-
+/*
 // return how many clock tick interrupts have occurred
 // since start.
 uint64
@@ -91,3 +116,47 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+*/
+uint64
+sys_setsched(void)
+{
+  int mode;
+  argint(0, &mode);
+  if(mode < 0 || mode > 2) return -1;
+  sched_mode = mode;
+  return 0;
+}
+
+uint64
+sys_setpriority(void)
+{
+  int pri;
+  argint(0, &pri);
+  myproc()->priority = pri;
+  return 0;
+}
+
+uint64
+sys_getmetrics(void)
+{
+  uint64 addr;
+  argaddr(0, &addr);
+  struct sched_metrics *m = metrics;
+  if(copyout(myproc()->pagetable, addr, (char*)m, sizeof(metrics)) < 0)
+    return -1;
+  return 0;
+}
+/*uint64 sys_set_fcfs(void) {
+  sched_mode = SCHED_FCFS;
+  return 0;
+}
+
+uint64 sys_set_priority_sched(void) {
+  sched_mode = SCHED_PRIORITY;
+  return 0;
+}
+
+uint64 sys_set_default_sched(void) {
+  sched_mode = SCHED_ROUND_ROBIN;
+  return 0;
+}*/

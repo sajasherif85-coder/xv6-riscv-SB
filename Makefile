@@ -13,6 +13,7 @@ OBJS = \
   $K/main.o \
   $K/vm.o \
   $K/proc.o \
+  $K/sysutil.o \
   $K/swtch.o \
   $K/trampoline.o \
   $K/trap.o \
@@ -70,6 +71,8 @@ CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
+CFLAGS += -DBOOT_EPOCH=$(shell date +%s)
+
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
 CFLAGS += -fno-pie -no-pie
@@ -124,11 +127,25 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 
 UPROGS=\
 	$U/_cat\
-	$U/_echo\
+	$U/_add\
 	$U/_cp\
-	$U/_forktest\
+	$U/_fact\
+	$U/_countsyscall\
+	$U/_ps\
+	$U/_diff\
 	$U/_find\
+	$U/_datetime\
+	$U/_shutdown\
+	$U/_tail\
+	$U/_uptime\
+	$U/_rand\
+	$U/_echo\
+	$U/_mv\
+	$U/_forktest\
+	$U/_sleep\
 	$U/_grep\
+	$U/_schedtest\
+	$U/_touch\
 	$U/_init\
 	$U/_kill\
 	$U/_ln\
@@ -138,9 +155,11 @@ UPROGS=\
 	$U/_sh\
 	$U/_stressfs\
 	$U/_usertests\
+	$U/_keyboard\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

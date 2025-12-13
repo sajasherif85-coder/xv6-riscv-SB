@@ -1,5 +1,13 @@
 struct stat;
-
+#include "rtcdate.h"
+struct pinfo {
+  int pid;
+  int ppid;
+  int state;
+  uint64 sz;
+  char name[16];
+};
+int getptable(int nproc, uint64 buffer);
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));
@@ -22,6 +30,29 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+int kbdint(void);/*** */
+int countsyscall(void);
+int getppid(void);
+int datetime(struct rtcdate *);
+int shutdown(void);
+int rand(void);
+int setsched(int);
+int setpriority(int);
+int fcfs(void);
+int priority_sched(void);
+int default_sched(void);
+
+struct sched_metrics {
+  int nproc;
+  uint64 total_turnaround;
+  uint64 total_wait;
+};
+
+int getmetrics(struct sched_metrics*);
+
+
+
+
 
 // ulib.c
 int stat(const char*, struct stat*);

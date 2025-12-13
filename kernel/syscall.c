@@ -53,19 +53,21 @@ argraw(int n)
 }
 
 // Fetch the nth 32-bit system call argument.
-void
+int
 argint(int n, int *ip)
 {
   *ip = argraw(n);
+  return 0;
 }
 
 // Retrieve an argument as a pointer.
 // Doesn't check for legality, since
 // copyin/copyout will do that.
-void
+int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+  return 0;
 }
 
 // Fetch the nth word-sized system call argument as a null-terminated string.
@@ -101,6 +103,18 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
+extern uint64 sys_kbdint(void);
+extern uint64 sys_countsyscall(void);
+extern uint64 sys_getppid(void);
+extern uint64 sys_getptable(void);
+extern uint64 sys_datetime(void);
+extern uint64 sys_shutdown(void);
+extern uint64 sys_rand(void);
+extern uint64 sys_uptime(void);
+extern uint64 sys_setpriority(void);
+extern uint64 sys_setsched(void);
+extern uint64 sys_getmetrics(void);
+
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -126,18 +140,34 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_kbdint]  sys_kbdint,
+[SYS_countsyscall] sys_countsyscall,
+[SYS_getppid] sys_getppid,
+[SYS_getptable] sys_getptable,
+[SYS_datetime] sys_datetime,
+[SYS_shutdown] sys_shutdown,
+[SYS_rand]    sys_rand,
+[SYS_uptime]  sys_uptime,
+[SYS_setpriority] sys_setpriority,
+[SYS_setsched] sys_setsched,
+[SYS_getmetrics] sys_getmetrics,
+
+
 };
 
+uint64 syscall_count = 0;
 void
 syscall(void)
 {
   int num;
   struct proc *p = myproc();
 
+
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // Use num to lookup the system call function for num, call it,
     // and store its return value in p->trapframe->a0
+    syscall_count++;
     p->trapframe->a0 = syscalls[num]();
   } else {
     printf("%d %s: unknown sys call %d\n",

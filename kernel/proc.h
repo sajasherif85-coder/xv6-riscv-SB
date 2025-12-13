@@ -1,3 +1,4 @@
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -17,16 +18,33 @@ struct context {
   uint64 s10;
   uint64 s11;
 };
+// schedular constants to set the scheduling mode
+#define SCHED_ROUND_ROBIN 0
+#define SCHED_FCFS        1
+#define SCHED_PRIORITY     2
+struct proc;
 
+extern int sched_mode;  // Declare global scheduler mode
 // Per-CPU state.
+struct sched_metrics {
+  int nproc;
+  uint64 total_turnaround;
+  uint64 total_wait;
+};
+extern struct sched_metrics metrics[3];
+
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
 };
+///arayy of 8 cpus 8 process multicore
 
 extern struct cpu cpus[NCPU];
+
+// Prototype for preemption check triggered by timer interrupt.
+void check_preempt(void);
 
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
@@ -78,11 +96,26 @@ struct trapframe {
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
 };
+// Process information structure for getptable system call
+struct pinfo {
+  int pid;
+  int ppid;
+  int state;
+  uint64 sz;
+  char name[16];
+};
+int getptable(int nproc, uint64 buffer);
+
+
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-
-// Per-process state
-struct proc {
+// UNUSED 64 states for processes that are not in use
+// USED 65 states for processes that are in use but not yet running
+// SLEEPING 66 states for processes that are sleeping-blocked
+// RUNNABLE 67 states for processes that are ready to run
+// RUNNING 68 states for processes that are currently running
+// ZOMBIE 69 states for processes that have terminated but not yet been cleaned up
+struct proc { // pcb
   struct spinlock lock;
 
   // p->lock must be held when using these:
@@ -104,4 +137,14 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+   uint creation_time;          // Ticks when process was created
+  uint run_time;               // How long the process has run
+  uint64 finish_time;
+  uint64 waiting_time;
+  // For the scheduler
+  int started;
+    // Scheduling data
+  int priority;
+
+
 };

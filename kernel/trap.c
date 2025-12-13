@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+extern struct proc proc[NPROC];
 
 struct spinlock tickslock;
 uint ticks;
@@ -46,10 +47,10 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
+
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+
   if(r_scause() == 8){
     // system call
 
@@ -77,10 +78,36 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+    // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2) {
+    if(sched_mode == SCHED_PRIORITY) {
+      struct proc *cur = myproc();
+      if(cur != 0) {
+        int should_yield = 0;
+        struct proc *q;
+        // scan for any runnable process with higher priority
+        for(q = proc; q < &proc[NPROC]; q++) {
+          acquire(&q->lock);
+          int is_runnable = (q->state == RUNNABLE);
+          int qprio = q->priority;
+          release(&q->lock);
+
+          if(is_runnable && qprio < cur->priority) {
+            should_yield = 1;
+            break;
+          }
+        }
+        if(should_yield)
+          yield();
+      }
+    } else if(sched_mode == SCHED_ROUND_ROBIN) {
+      yield();
+    }
+    // for FCFS, do not yield (non-preemptive)
+  }
 
   usertrapret();
+
 }
 
 //
@@ -109,7 +136,7 @@ usertrapret(void)
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
-  
+
   // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
@@ -122,7 +149,7 @@ usertrapret(void)
   // tell trampoline.S the user page table to switch to.
   uint64 satp = MAKE_SATP(p->pagetable);
 
-  // jump to userret in trampoline.S at the top of memory, which 
+  // jump to userret in trampoline.S at the top of memory, which
   // switches to the user page table, restores user registers,
   // and switches to user mode with sret.
   uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
@@ -131,14 +158,14 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
-void 
+void
 kerneltrap()
 {
   int which_dev = 0;
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-  
+
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
@@ -151,8 +178,32 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+   // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2 && myproc() != 0) {
+    if(sched_mode == SCHED_PRIORITY) {
+      struct proc *cur = myproc();
+      if(cur != 0) {
+        int should_yield = 0;
+        struct proc *q;
+        for(q = proc; q < &proc[NPROC]; q++) {
+          acquire(&q->lock);
+          int is_runnable = (q->state == RUNNABLE);
+          int qprio = q->priority;
+          release(&q->lock);
+
+          if(is_runnable && qprio < cur->priority) {
+            should_yield = 1;
+            break;
+          }
+        }
+        if(should_yield)
+          yield();
+      }
+    } else {
+      yield();
+    }
+  }
+
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -166,6 +217,7 @@ clockintr()
   if(cpuid() == 0){
     acquire(&tickslock);
     ticks++;
+    update_time();
     wakeup(&ticks);
     release(&tickslock);
   }
@@ -175,7 +227,6 @@ clockintr()
   // of a second.
   w_stimecmp(r_time() + 1000000);
 }
-
 // check if it's an external interrupt or software interrupt,
 // and handle it.
 // returns 2 if timer interrupt,
@@ -215,4 +266,3 @@ devintr()
     return 0;
   }
 }
-

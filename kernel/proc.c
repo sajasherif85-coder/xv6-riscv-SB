@@ -6,9 +6,14 @@
 #include "proc.h"
 #include "defs.h"
 
-struct cpu cpus[NCPU];
 
+struct cpu cpus[NCPU];
 struct proc proc[NPROC];
+// Scheduler statistics
+uint64 total_turnaround[3] = {0, 0, 0};
+uint64 total_waiting[3]    = {0, 0, 0};
+uint64 completed_count[3]  = {0, 0, 0};
+struct spinlock stats_lock;
 
 struct proc *initproc;
 
@@ -19,7 +24,9 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+int sched_mode = SCHED_ROUND_ROBIN;  // global scheduler mode
 
+struct sched_metrics metrics[3] = {0};
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
@@ -33,7 +40,7 @@ void
 proc_mapstacks(pagetable_t kpgtbl)
 {
   struct proc *p;
-  
+
   for(p = proc; p < &proc[NPROC]; p++) {
     char *pa = kalloc();
     if(pa == 0)
@@ -48,7 +55,8 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
+  initlock(&stats_lock, "stats_lock");
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -57,6 +65,53 @@ procinit(void)
       p->kstack = KSTACK((int) (p - proc));
   }
 }
+
+
+// Copy process table entries into user buffer.
+
+int
+getptable(int nproc, uint64 buffer)
+{
+  struct proc *p;
+  struct pinfo pi;
+  int count = 0;
+  // Validate parameters
+  if (nproc < 1 || buffer == 0)
+    return 0;
+
+  // Iterate through process table
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+
+    if (p->state != UNUSED) {
+      // Fill process info structure
+      pi.pid = p->pid;
+      pi.ppid = p->parent ? p->parent->pid : 0;
+      pi.state = p->state;
+      pi.sz = p->sz;
+      safestrcpy(pi.name, p->name, sizeof(p->name));
+
+      release(&p->lock);
+
+      // Copy to user buffer
+      if (copyout(myproc()->pagetable, (uint64)buffer,(char *)&pi, sizeof(pi)) < 0)
+        return 0;
+
+      buffer += sizeof(pi);
+      count++;
+
+      // Stop if we've filled nproc entries
+      if (count >= nproc)
+        break;
+    } else {
+      release(&p->lock);
+    }
+  }
+
+  return 1;
+}
+
+
 
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
@@ -93,7 +148,7 @@ int
 allocpid()
 {
   int pid;
-  
+
   acquire(&pid_lock);
   pid = nextpid;
   nextpid = nextpid + 1;
@@ -145,6 +200,14 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  	// initialize new variables here
+p->creation_time = ticks;
+p->finish_time = 0;
+p->run_time = 0;
+p->waiting_time = 0;
+p->priority = 10;   // default priority
+p->started = 0;
+
 
   return p;
 }
@@ -169,7 +232,10 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->creation_time = ticks;
+  p->run_time = 0;
 }
+
 
 // Create a user page table for a given process, with no user memory,
 // but with trampoline and trapframe pages.
@@ -236,7 +302,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy initcode's instructions
   // and data into it.
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
@@ -343,6 +409,50 @@ reparent(struct proc *p)
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
+/*void
+exit(int status)
+{
+  struct proc *p = myproc();
+
+  if(p == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(int fd = 0; fd < NOFILE; fd++){
+    if(p->ofile[fd]){
+      struct file *f = p->ofile[fd];
+      fileclose(f);
+      p->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  iput(p->cwd);
+  end_op();
+  p->cwd = 0;
+
+  acquire(&wait_lock);
+
+  // Give any children to init.
+  reparent(p);
+
+  // Parent might be sleeping in wait().
+  wakeup(p->parent);
+
+  acquire(&p->lock);
+
+  p->xstate = status;
+  p->state = ZOMBIE;
+
+  release(&wait_lock);
+
+  // Jump into the scheduler, never to return.
+  sched();
+  panic("zombie exit");
+}/*/
+
+
+
 void
 exit(int status)
 {
@@ -372,18 +482,32 @@ exit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
   p->state = ZOMBIE;
 
   release(&wait_lock);
+  p->finish_time = ticks;
+
+uint64 turnaround = p->finish_time - p->creation_time;
+uint64 waiting = turnaround - p->run_time;
+
+metrics[sched_mode].total_turnaround += turnaround;
+metrics[sched_mode].total_wait += waiting;
+metrics[sched_mode].nproc++;
+
+
 
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
 }
+
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
@@ -414,6 +538,8 @@ wait(uint64 addr)
             release(&wait_lock);
             return -1;
           }
+          // Calculate metrics
+
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
@@ -428,12 +554,11 @@ wait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
 }
-
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -441,6 +566,60 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+void
+update_time()
+{
+  struct proc* p;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state == RUNNING) {
+      p->run_time++;
+    } else if (p->state == RUNNABLE) {
+      p->waiting_time++;
+    }
+
+    release(&p->lock);
+  }
+}
+
+struct proc proc[NPROC];  // actual memory allocation
+struct proc *choose_next_process() {
+    struct proc *p;
+
+    if (sched_mode == SCHED_ROUND_ROBIN) {
+        for (p = proc; p < &proc[NPROC]; p++) {
+            if (p->state == RUNNABLE)
+                return p;
+        }
+    }
+    else if (sched_mode == SCHED_FCFS) {
+        struct proc *chosen = 0;
+        for (p = proc; p < &proc[NPROC]; p++) {
+            if (p->state == RUNNABLE) {
+                if (chosen == 0 || p->creation_time < chosen->creation_time) {
+                    chosen = p;
+                }
+            }
+        }
+        return chosen;
+    }
+    else if (sched_mode == SCHED_PRIORITY) {
+        struct proc *chosen = 0;
+        for (p = proc; p < &proc[NPROC]; p++) {
+            if (p->state == RUNNABLE) {
+                if (chosen == 0 || p->priority < chosen->priority) {
+                    chosen = p;
+                }
+            }
+        }
+        return chosen;
+    }
+
+    return 0;  // no RUNNABLE process found
+}
+
+
 void
 scheduler(void)
 {
@@ -455,12 +634,13 @@ scheduler(void)
     intr_on();
 
     int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
+
+    p = choose_next_process();
+
+    if(p != 0) {
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
+
+      if (p->state == RUNNABLE) {
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
@@ -548,7 +728,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -627,7 +807,7 @@ int
 killed(struct proc *p)
 {
   int k;
-  
+
   acquire(&p->lock);
   k = p->killed;
   release(&p->lock);

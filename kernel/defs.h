@@ -8,6 +8,8 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+#include "datetime.h"
+
 
 // bio.c
 void            binit(void);
@@ -64,6 +66,9 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+// sysutill.c
+void            rand_init(void);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
@@ -96,6 +101,7 @@ struct cpu*     mycpu(void);
 struct cpu*     getmycpu(void);
 struct proc*    myproc();
 void            procinit(void);
+void            update_time(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);
 void            sleep(void*, struct spinlock*);
@@ -106,6 +112,11 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+extern int      sched_mode;
+struct proc;
+void            print_sched_stats(void);
+uint64          get_average_turnaround(void);
+uint64          get_average_waiting(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -134,12 +145,13 @@ int             strncmp(const char*, const char*, uint);
 char*           strncpy(char*, const char*, int);
 
 // syscall.c
-void            argint(int, int*);
+int           argint(int, int*);
 int             argstr(int, char*, int);
-void            argaddr(int, uint64 *);
+int            argaddr(int, uint64 *);
 int             fetchstr(uint64, char*, int);
 int             fetchaddr(uint64, uint64*);
 void            syscall();
+
 
 // trap.c
 extern uint     ticks;
